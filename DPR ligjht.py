@@ -6,15 +6,21 @@ import numpy as np
 from pathlib import Path
 import pandas as pd
 
-def load_passages(passages_file: Path, max_rows=50):  # 최대 50개만 로드하여 속도 최적화
-    df = pd.read_csv(passages_file, sep='\t', header=0, dtype={'id': str}, nrows=max_rows)
-    return [
-        {"id": row['id'], "text": row['text'], "title": row['title']}
-        for _, row in df.iterrows()
-    ]
-
-# 패시지 로드
-passages = load_passages(Path("psgs_w100.tsv"))
+class PassageLoader:
+    def init(self, passages_file):
+        self.passages_file = passages_file
+        self.current_position = 0
+    # 패시지 로드
+    def load_passages(passages_file: Path, max_rows=50):  # 최대 50개만 로드하여 속도 최적화
+        df = pd.read_csv(passages_file, sep='\t', header=0, dtype={'id': str}, nrows=max_rows)
+        return [
+            {"id": row['id'], "text": row['text'], "title": row['title']}
+            for _, row in df.iterrows()
+        ]
+    if name == 'main':
+        path = 'data/docs/psgs_w100.tsv'
+        passages = load_passages(path)
+        print(passages)
 
 # 컨텍스트 인코더 및 토크나이저 로드 (strict=False 추가하여 경고 방지)
 context_encoder = DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
@@ -84,27 +90,33 @@ def llm(query, docs1, docs2):
     """LLM 모델을 호출하여 검색된 문서들을 입력으로 제공"""
     query_embedding = encode_question_store(query)
     retrieved_passages = get_main_referencees(query_embedding, top_k=2)
-    similar_questions = find_similar_questions(query_embedding, top_n=2)
+    similar_questions = get_similar_questions(query_embedding, top_n=2)
     related_passages = get_sub_references(similar_questions, top_n=2)
     docs1.extend([passage['text'] for passage, _ in retrieved_passages])
     docs2.extend([passage['text'] for passage, _ in related_passages])
     return docs1, docs2
 
 
-def main():
-    # 테스트 쿼리 실행 (최대 3개 제한하여 속도 최적화)
-    test_queries = [
-        "the Hiyamas reaction was very cool",
-        "How does photosynthesis work?",
-        "What is the capital of France?"
-    ]
+import IO
+import llm
 
-    for query in test_queries:
-        docs1, docs2 = llm(query, [], [])
-        print(f"\nQuery: {query}")
-        print("\nLLM에 전달될 문서 리스트 1:")
-        for doc in docs1:
-            print(doc)
-        print("\nLLM에 전달될 문서 리스트 2:")
-        for doc in docs2:
-            print(doc)
+def main():
+    """질문을 로드하고, 주요 레퍼런스를 가져와 LLM을 실행하는 메인 함수"""
+    QL = IO.PassageLoader('data/query/querys.tsv')
+    Q = QL.load_passages(10)
+
+    # 주요 레퍼런스를 가져오는 함수 호출 (올바른 모듈명 필요)
+    main_reference, sub_reference = llm.get_main_references(Q)
+
+    # LLM 실행
+    response = llm.main(Q, main_reference, sub_reference)
+
+    # 결과 저장
+    Q_res_list = []
+    Q_res_list.append((Q, response))
+
+    print("질문:", Q)
+    print("응답:", response)
+
+if __name__ == "__main__":
+    main()
