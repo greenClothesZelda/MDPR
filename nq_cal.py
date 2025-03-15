@@ -58,7 +58,7 @@ def encode_dpr_question(question, model):
     return embedding
 
 # ✅ (5) Top-k 검색 및 정확도 평가 (BM25, DPR, MDPR)
-def compute_top_k_accuracy(questions, answers, documents, bm25, tokenized_docs, dpr_doc_embeddings, mdpr_doc_embeddings, k=5):
+def compute_top_k_accuracy(questions, answers, documents, bm25, tokenized_docs, dpr_doc_embeddings, mdpr_doc_embeddings, k=3):
     correct_bm25, correct_dpr, correct_mdpr = 0, 0, 0
     total = len(questions)
 
