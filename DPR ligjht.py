@@ -6,22 +6,6 @@ import numpy as np
 from pathlib import Path
 import pandas as pd
 
-class PassageLoader:
-    def init(self, passages_file):
-        self.passages_file = passages_file
-        self.current_position = 0
-    # 패시지 로드
-    def load_passages(passages_file: Path, max_rows=50):  # 최대 50개만 로드하여 속도 최적화
-        df = pd.read_csv(passages_file, sep='\t', header=0, dtype={'id': str}, nrows=max_rows)
-        return [
-            {"id": row['id'], "text": row['text'], "title": row['title']}
-            for _, row in df.iterrows()
-        ]
-    if name == 'main':
-        path = 'data/docs/psgs_w100.tsv'
-        passages = load_passages(path)
-        print(passages)
-
 # 컨텍스트 인코더 및 토크나이저 로드 (strict=False 추가하여 경고 방지)
 context_encoder = DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
 context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
@@ -63,7 +47,7 @@ def encode_question_store(query: str):
         return query_embedding
     return encode_question(query)
 
-def get_main_referencees(query_embedding, top_k=2):  # 검색 개수 제한하여 속도 최적화
+def get_main_references(query_embedding, top_k=2):  # 검색 개수 제한하여 속도 최적화
     """질문과 가장 유사한 k개의 패시지를 검색 (내적 유사도 기반)"""
     distances, indices = passage_index.search(query_embedding, top_k)
     return [(passages[i], distances[0][j]) for j, i in enumerate(indices[0])]
@@ -82,14 +66,14 @@ def get_sub_references(similar_questions, top_n=2):
     related_passages = []
     for question, _ in similar_questions:
         question_embedding = encode_question(question)
-        passages = get_main_referencees(question_embedding, top_n)
+        passages = get_main_references(question_embedding, top_n)
         related_passages.extend(passages)
     return related_passages
 
 def llm(query, docs1, docs2):
     """LLM 모델을 호출하여 검색된 문서들을 입력으로 제공"""
     query_embedding = encode_question_store(query)
-    retrieved_passages = get_main_referencees(query_embedding, top_k=2)
+    retrieved_passages = get_main_references(query_embedding, top_k=2)
     similar_questions = get_similar_questions(query_embedding, top_n=2)
     related_passages = get_sub_references(similar_questions, top_n=2)
     docs1.extend([passage['text'] for passage, _ in retrieved_passages])

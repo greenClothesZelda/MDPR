@@ -1,10 +1,10 @@
+import IO
 import llm
-import reference
 
 
-def main():
-    Q = input("Enter Question: ")
-    main_reference, sub_reference = reference.get_main_references(Q)
+def main(question):
+    Q = question
+    main_reference, sub_reference = .get_main_references(Q)
     response = llm.main(Q,main_reference, sub_reference)
 
     Q_res_list = []
