@@ -17,12 +17,15 @@ def set_ref(question_encoder, question_tokenizer, context_encoder, context_token
 
 def main(question):
     main_reference, sub_reference = r.get_reference(question, 3)
-    return main_reference+sub_reference
 
-    # response = llm.main(question, main_reference, sub_reference)
-    #
-    # Q_res_list = []
-    # Q_res_list.append(question, response)
+    # ✅ 두 리스트를 합쳐 하나의 리스트로 저장
+    all_references = main_reference + sub_reference  # ✅ 인덱스 리스트
+
+    # ✅ passage 인덱스를 원본 텍스트로 변환하여 리스트 반환
+    result_texts = [r.passage_texts[idx] for idx in all_references]
+
+    return result_texts
+
 if __name__ == "__main__":
     set_ref(
         context_encoder=DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base"),
@@ -38,4 +41,3 @@ if __name__ == "__main__":
     print(main('Hello? my nsdfadsaame is jinsu'))
     print(main('Hello? mydfasfa name is jinsu'))
     r.save_Q_past()
-    #print(r.QA_list)
