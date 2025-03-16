@@ -1,4 +1,4 @@
-# 컨텍스트 인코더 및 토크나이저 로드
+# Feature Map 관련 최적화 코드 추가
 from rank_bm25 import BM25Okapi
 from transformers import DPRContextEncoderTokenizer, DPRContextEncoder, DPRQuestionEncoder, DPRQuestionEncoderTokenizer
 import IO
@@ -11,13 +11,15 @@ import option
 tensor_path = 'data/tensor'
 Q_past_path = '/Q_past.pt'
 QA_list_path = '/QA_list.pt'
+feature_map_path = '/feature_map.pt'  # ✅ Feature Map 저장 경로 추가
 
 class Reference:
-    def __init__(self, question_encoder, question_tokenizer, context_encoder, context_tokenizer, documents_PATH):
+    def __init__(self, question_encoder, question_tokenizer, context_encoder, context_tokenizer, documents_PATH, batch_size=32):
         self.question_encoder = question_encoder
         self.question_tokenizer = question_tokenizer
         self.context_encoder = context_encoder
         self.context_tokenizer = context_tokenizer
+        self.batch_size = batch_size  # ✅ 배치 크기 지정
 
         self.Q_past = torch.empty((0, 768))  # 임베딩 차원 맞춰 초기화
         self.QA_list = torch.empty((0, 3), dtype=torch.long)  # 저장된 passage 인덱스 초기화
@@ -32,27 +34,56 @@ class Reference:
         self.docs = IO.load_passages(self.documents_PATH)
         self.passage_texts = [passage["text"] for passage in self.docs]
 
-        # DPR 컨텍스트 인코더를 사용하여 패시지 임베딩 생성
-        passage_inputs = self.context_tokenizer(self.passage_texts, padding=True, truncation=True, return_tensors="pt")
-        self.passage_embeddings = self.context_encoder(**passage_inputs).pooler_output
+        # ✅ Feature Map이 존재하면 로드, 없으면 생성
+        if os.path.exists(tensor_path + feature_map_path):
+            self.feature_map = torch.load(tensor_path + feature_map_path)
+        else:
+            self.feature_map = self.encode_passages_batch(self.passage_texts)
+            torch.save(self.feature_map, tensor_path + feature_map_path)
+
+        self.passage_embeddings = self.feature_map  # Feature Map 활용
+
+    def encode_passages_batch(self, passages):
+        """ ✅ 배치 단위로 DPR 문서 임베딩 생성 (Feature Map 적용) """
+        all_embeddings = []
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        for i in range(0, len(passages), self.batch_size):
+            batch = passages[i:i + self.batch_size]  # 배치 단위로 슬라이싱
+            passage_inputs = self.context_tokenizer(batch, padding=True, truncation=True, return_tensors="pt").to(device)
+
+            with torch.no_grad():
+                embeddings = self.context_encoder(**passage_inputs).pooler_output
+
+            all_embeddings.append(embeddings.cpu())  # GPU에서 CPU로 이동하여 저장
+
+        return torch.cat(all_embeddings, dim=0)  # 모든 배치 결과를 합침
 
     def get_main_reference(self, embedded_query, k):
-        # DPR 유사도 계산
-        sim = torch.matmul(self.passage_embeddings, embedded_query.T).squeeze()
+        """ ✅ 배치 단위로 DPR 유사도 계산 (Feature Map 활용) """
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        sim_scores = []
 
-        # BM25 점수 계산
-        bm25 = BM25Okapi(self.passage_texts)
-        bm25_scores = torch.tensor(bm25.get_scores(embedded_query.squeeze().tolist()), dtype=torch.float32)
+        for i in range(0, len(self.passage_embeddings), self.batch_size):
+            batch_embeddings = self.passage_embeddings[i:i + self.batch_size].to(device)
+            sim = torch.matmul(batch_embeddings, embedded_query.T).squeeze()
+            sim_scores.append(sim.cpu())
 
-        # DPR 유사도 + BM25 점수 결합
-        combined_scores = sim + option.weight_bm25 * bm25_scores
+        combined_scores = torch.cat(sim_scores)  # 모든 배치 결과 합침
 
-        # 결합된 점수를 기반으로 상위 k개 가져오기
-        top_k_combined_values, top_k_combined_indices = torch.topk(combined_scores, k, dim=0)
+        # ✅ BM25 Feature Map 활용
+        if not hasattr(self, 'bm25'):
+            self.bm25 = BM25Okapi(self.passage_texts)
 
-        return top_k_combined_indices.tolist(), top_k_combined_values.tolist()  # ✅ 인덱스와 점수 반환
+        bm25_scores = torch.tensor(self.bm25.get_scores(embedded_query.squeeze().tolist()), dtype=torch.float32)
 
+        # ✅ DPR 유사도 + BM25 점수 결합
+        final_scores = combined_scores + option.weight_bm25 * bm25_scores
 
+        # ✅ 상위 k개 추출
+        top_k_values, top_k_indices = torch.topk(final_scores, k, dim=0)
+
+        return top_k_indices.tolist(), top_k_values.tolist()
 
     def get_sub_references(self, embedded_query, a):
         if self.Q_past.shape[0] == 0:
@@ -69,10 +100,7 @@ class Reference:
         # 🔹 유효한 인덱스 필터링
         valid_indices = [idx for idx in top_a_indices.tolist() if idx < self.QA_list.shape[0]]
 
-        # 🔹 a개만 반환
         return self.QA_list[valid_indices].squeeze().tolist() if valid_indices else []
-
-
 
     def get_reference(self, query, k):
         query_input = self.question_tokenizer(query, return_tensors="pt")
@@ -103,13 +131,6 @@ class Reference:
 
         return list(final_passages)  # ✅ 최종적으로 k개 반환
 
-
-
-    def query_embedding(self, query):
-        query_input = self.question_tokenizer(query, return_tensors="pt")
-        query_embedding = self.question_encoder(**query_input).pooler_output
-        return query_embedding
-
     def save_Q_past(self):
         torch.save(self.Q_past, tensor_path + Q_past_path)
         torch.save(self.QA_list, tensor_path + QA_list_path)
@@ -124,17 +145,11 @@ if __name__ == "__main__":
         context_tokenizer=DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base"),
         question_encoder=DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base"),
         question_tokenizer=DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base"),
-        documents_PATH='data/docs/psgs_w100.tsv'
+        documents_PATH='data/docs/psgs_w100.tsv',
+        batch_size=32  # ✅ 배치 크기 설정
     )
 
-    # ✅ 최종 실행 코드 (중복 제거된 passage들이 정확히 k개 반환되는지 확인)
-    queries = [
-        "Hello? my name is Jinsu",
-        "Hello? my name is John",
-        "Hello? my name is Alice",
-        "Hello? my name is Bob",
-        "Hello? my name is Charlie"
-    ]
+    queries = ["Hello? my name is Jinsu", "Hello? my name is Alice"]
 
     for query in queries:
         references = ref.get_reference(query, 3)
