@@ -17,7 +17,7 @@ def set_ref(question_encoder, question_tokenizer, context_encoder, context_token
 
 def main(question):
     main_reference, sub_reference = r.get_reference(question, 3)
-    return main_reference, sub_reference
+    return main_reference+sub_reference
 
     # response = llm.main(question, main_reference, sub_reference)
     #
