@@ -90,7 +90,10 @@ class Reference:
 
         # 🔹 중복 제거하며 추가
         final_passages = set(sub_ref[:a])  # sub_ref에서 a개 추가
-        remaining = k - len(final_passages)  # 부족한 개수 계산
+        remaining = k - a  # 부족한 개수 계산
+
+        # k-a개 만큼 final_passages와 set(main_ref[:k-a]) 합집합
+        final_passages = final_passages | set(main_ref[:remaining])
 
         # 🔹 부족한 경우 main_ref에서 추가
         for idx in main_ref:
