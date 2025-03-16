@@ -16,15 +16,13 @@ def set_ref(question_encoder, question_tokenizer, context_encoder, context_token
     )
 
 def main(question):
-    main_reference, sub_reference = r.get_reference(question, 3)
-
-    # ✅ 두 리스트를 합쳐 하나의 리스트로 저장
-    all_references = main_reference + sub_reference  # ✅ 인덱스 리스트
+    all_references = r.get_reference(question, 3)  # ✅ 하나의 리스트만 반환
 
     # ✅ passage 인덱스를 원본 텍스트로 변환하여 리스트 반환
     result_texts = [r.passage_texts[idx] for idx in all_references]
 
     return result_texts
+
 
 if __name__ == "__main__":
     set_ref(

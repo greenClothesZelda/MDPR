@@ -47,36 +47,30 @@ class Reference:
         # DPR 유사도 + BM25 점수 결합
         combined_scores = sim + option.weight_bm25 * bm25_scores
 
-        # 결합된 점수를 기반으로 상위 k 인덱스 가져오기
+        # 결합된 점수를 기반으로 상위 k개 가져오기
         top_k_combined_values, top_k_combined_indices = torch.topk(combined_scores, k, dim=0)
 
-        return top_k_combined_indices.tolist()
+        return top_k_combined_indices.tolist(), top_k_combined_values.tolist()  # ✅ 인덱스와 점수 반환
 
-    def get_sub_references(self, embedded_query, k):
+
+
+    def get_sub_references(self, embedded_query, a):
         if self.Q_past.shape[0] == 0:
             self.Q_past = embedded_query.view(1, -1)
             return []
 
-        # 현재 쿼리(embedded_query)와 Q_past(이전 질문들) 간 유사도 계산
+        # 🔹 Q_past와 현재 쿼리 간 유사도 계산
         diff = self.Q_past - embedded_query.view(1, -1)
-        similarity_scores = -torch.norm(diff, dim=1)  # 유사도가 높은 순으로 정렬
+        similarity_scores = -torch.norm(diff, dim=1)  # 유사도가 높은 순 정렬
 
-        # 상위 k개의 유사도가 높은 질문 인덱스 가져오기
-        top_k_values, top_k_indices = torch.topk(similarity_scores, min(k, similarity_scores.shape[0]), dim=0)
+        # 🔹 top-a 인덱스 추출
+        _, top_a_indices = torch.topk(similarity_scores, min(a, similarity_scores.shape[0]), dim=0)
 
-        # ✅ 인덱스가 QA_list 범위를 초과하지 않도록 필터링
-        valid_indices = [idx for idx in top_k_indices.tolist() if idx < self.QA_list.shape[0]]
+        # 🔹 유효한 인덱스 필터링
+        valid_indices = [idx for idx in top_a_indices.tolist() if idx < self.QA_list.shape[0]]
 
-        # ✅ self.QA_list가 비어 있으면 빈 리스트 반환하여 오류 방지
-        if len(valid_indices) > 0:
-            sub_references = self.QA_list[valid_indices].squeeze().tolist()  # ✅ 리스트 내부 리스트 제거
-        else:
-            sub_references = []
-
-        # Q_past 업데이트
-        self.Q_past = torch.cat((self.Q_past, embedded_query.view(1, -1)), dim=0)
-
-        return sub_references
+        # 🔹 a개만 반환
+        return self.QA_list[valid_indices].squeeze().tolist() if valid_indices else []
 
 
 
@@ -84,37 +78,27 @@ class Reference:
         query_input = self.question_tokenizer(query, return_tensors="pt")
         embedded_query = self.question_encoder(**query_input).pooler_output
 
-        main_ref = self.get_main_reference(embedded_query, k)
-        sub_ref = self.get_sub_references(embedded_query, k)
+        # 🔹 get_main_reference에서 유사도와 인덱스를 함께 반환
+        main_ref, main_scores = self.get_main_reference(embedded_query, k)
 
-        # ✅ 중복 제거 (set을 사용하여 리스트 내부 원소 비교)
-        unique_passages = set(p[0] if isinstance(p, list) else p for p in main_ref)
-        final_passages = []
-        pointer = 0
+        # 🔹 main_ref에서 가장 높은 유사도를 가져와 `a` 결정
+        max_similarity = max(main_scores)
+        a = max(1, int(k * 0.4)) if max_similarity >= 0.7 else max(1, int(k * 0.3))
 
-        while pointer < len(sub_ref):
-            passage = sub_ref[pointer]
-            passage_id = passage[0] if isinstance(passage, list) else passage  # 리스트 내부 원소 비교
-            if passage_id not in unique_passages:
-                unique_passages.add(passage_id)
-                final_passages.append(passage)
-            pointer += 1
+        # 🔹 sub_ref에서 a개 가져오기
+        sub_ref = self.get_sub_references(embedded_query, a)
 
-        # ✅ 부족한 passage 개수 계산
-        n = k - len(final_passages)
+        # 🔹 중복 제거하며 추가
+        final_passages = set(sub_ref[:a])  # sub_ref에서 a개 추가
+        remaining = k - len(final_passages)  # 부족한 개수 계산
 
-        # ✅ 부족한 passage를 유사도가 높은 passage로 채우기
-        if n > 0:
-            remaining_indices = list(set(range(len(self.passage_embeddings))) - unique_passages)
-            if len(remaining_indices) > 0:
-                remaining_scores = torch.matmul(self.passage_embeddings[remaining_indices], embedded_query.T).squeeze()
-                sorted_remaining_indices = torch.argsort(remaining_scores, descending=True)[:n].tolist()
+        # 🔹 부족한 경우 main_ref에서 추가
+        for idx in main_ref:
+            if len(final_passages) >= k:
+                break
+            final_passages.add(idx)  # 남은 개수만큼 main_ref에서 추가
 
-                for idx in sorted_remaining_indices:
-                    final_passages.append(remaining_indices[idx])
-
-        return main_ref, final_passages  # ✅ 리스트 내부 리스트 제거 후 반환
-
+        return list(final_passages)  # ✅ 최종적으로 k개 반환
 
 
 

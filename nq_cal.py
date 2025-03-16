@@ -4,7 +4,7 @@ import torch
 from transformers import DPRQuestionEncoder, DPRContextEncoder, DPRQuestionEncoderTokenizer, DPRContextEncoderTokenizer
 from rank_bm25 import BM25Okapi
 
-import main
+import result
 
 
 # ✅ (1) Natural Questions (NQ) 데이터셋 로드
@@ -13,18 +13,25 @@ def load_nq_dataset(file_path, num_samples=100):
     answers = []
     documents = []
 
-    with gzip.open(file_path, "rt", encoding="utf-8") as f:
+    # Use regular file open instead of gzip
+    with open(file_path, "r", encoding="utf-8") as f:
         for line in f:
             data = json.loads(line)
             question = data["question_text"]
-            answer = data["annotations"][0]["short_answers"][0]["text"]
+
+            # Add error handling for missing answers
+            if data["annotations"][0]["short_answers"]:
+                answer = data["annotations"][0]["short_answers"][0]["text"]
+            else:
+                answer = ""
+
             long_answer = data["long_answer"]["text"]
             questions.append(question)
             answers.append(answer)
             documents.append(long_answer)
 
             if len(questions) >= num_samples:
-                break  # 지정한 샘플 수만큼 가져오기
+                break
 
     return questions, answers, documents
 
@@ -87,7 +94,7 @@ def compute_top_k_accuracy(questions, answers, documents, bm25, tokenized_docs, 
     return correct_bm25 / total, correct_dpr / total, correct_mdpr / total
 
 # ✅ 실행: NQ 데이터셋을 불러와서 Top-k Retrieval Accuracy 평가
-nq_file_path = "/mnt/data/nq-train-sample.jsonl.gz"  # NQ 데이터셋 파일 경로
+nq_file_path = ""  # NQ 데이터셋 파일 경로
 questions, answers, documents = load_nq_dataset(nq_file_path)
 
 # BM25 검색 모델 구축
@@ -95,11 +102,11 @@ bm25, tokenized_docs = build_bm25_index(documents)
 
 # DPR & MDPR 문서 임베딩 생성
 dpr_doc_embeddings = encode_dpr_passages(documents, dpr_context_encoder)
-mdpr_doc_embeddings = encode_dpr_passages(documents, mdpr_context_encoder)
+#mdpr_doc_embeddings = encode_dpr_passages(documents, mdpr_context_encoder)
 
 # Top-5 Retrieval Accuracy 계산
 top_k_accuracy_bm25, top_k_accuracy_dpr, top_k_accuracy_mdpr = compute_top_k_accuracy(
-    questions, answers, documents, bm25, tokenized_docs, dpr_doc_embeddings, mdpr_doc_embeddings, k=5
+    questions, answers, documents, bm25, tokenized_docs, dpr_doc_embeddings, dpr_doc_embeddings, k=5
 )
 
 print(f"BM25 Top-5 Retrieval Accuracy: {top_k_accuracy_bm25:.2%}")
