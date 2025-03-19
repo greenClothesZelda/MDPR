@@ -8,32 +8,29 @@ import result
 
 
 # ✅ (1) Natural Questions (NQ) 데이터셋 로드
+import json
+
 def load_nq_dataset(file_path, num_samples=100):
-    questions = []
-    answers = []
-    documents = []
-
-    # Use regular file open instead of gzip
     with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            data = json.loads(line)
-            question = data["question_text"]
+        data = json.load(f)  # ✅ JSON 파일 전체를 한 번에 로드
 
-            # Add error handling for missing answers
-            if data["annotations"][0]["short_answers"]:
-                answer = data["annotations"][0]["short_answers"][0]["text"]
-            else:
-                answer = ""
+    questions, answers, documents = [], [], []
 
-            long_answer = data["long_answer"]["text"]
-            questions.append(question)
-            answers.append(answer)
-            documents.append(long_answer)
+    for item in data[:num_samples]:  # ✅ 처음 num_samples개만 가져오기
+        question = item["question"]
 
-            if len(questions) >= num_samples:
-                break
+        # 🔹 정답 리스트 중 첫 번째 정답 가져오기
+        answer = item["answers"][0] if item["answers"] else ""
+
+        # 🔹 positive_ctxs의 첫 번째 passage 사용
+        long_answer = item["positive_ctxs"][0]["text"] if item["positive_ctxs"] else ""
+
+        questions.append(question)
+        answers.append(answer)
+        documents.append(long_answer)
 
     return questions, answers, documents
+
 
 # ✅ (2) BM25 검색 모델 구축
 def build_bm25_index(documents):
@@ -81,7 +78,7 @@ def compute_top_k_accuracy(questions, answers, documents, bm25, tokenized_docs, 
         top_k_dpr = [documents[idx] for idx in top_k_indices_dpr]
 
         # 🔹 MDPR 검색 (사용자 정의 모델)
-        top_k_mdpr = main.main(question)
+        top_k_mdpr = result.main(question)
 
         # 🔹 정답 포함 여부 확인
         if any(answers[i] in doc for doc in top_k_bm25):
@@ -94,7 +91,7 @@ def compute_top_k_accuracy(questions, answers, documents, bm25, tokenized_docs, 
     return correct_bm25 / total, correct_dpr / total, correct_mdpr / total
 
 # ✅ 실행: NQ 데이터셋을 불러와서 Top-k Retrieval Accuracy 평가
-nq_file_path = ""  # NQ 데이터셋 파일 경로
+nq_file_path = "/Users/minjune/IdeaProjects/MDPR/data/nq/nq-dev.json"  # NQ 데이터셋 파일 경로
 questions, answers, documents = load_nq_dataset(nq_file_path)
 
 # BM25 검색 모델 구축
