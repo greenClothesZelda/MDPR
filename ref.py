@@ -150,6 +150,13 @@ class Reference:
             if len(final_passages) >= k:
                 break
             final_passages.add(idx)  # 남은 개수만큼 main_ref에서 추가
+
+        # 🔹 Q_past 및 QA_list 업데이트
+        self.Q_past = torch.cat([self.Q_past, embedded_query.detach().cpu()], dim=0)
+        new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long)  # 첫 번째 main_ref만 저장
+        self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
+
+        self.save_Q_past()  # 필요 시 저장 (선택사항)
         # print(f"\nQuery: {query}")
         # print(f"Main Ref: {main_ref}")
         # print(f"Final Passages (text):")
