@@ -28,7 +28,7 @@ def main():
     )
 
     eval_data = IO.read_jsonl_to_list(eval_data_path)
-    print(eval_data)
+    #print(eval_data)
 
     for item in eval_data:
         #print(item)
