@@ -139,7 +139,7 @@ class Reference:
 
         # 🔹 중복 제거하며 추가
         print(a)
-        final_passages = {tuple(ref) if isinstance(ref, list) else ref for ref in sub_ref[:a]} # sub_ref에서 a개 추가
+        final_passages = {ref if isinstance(ref, int) else ref[0] for ref in sub_ref[:a]} # sub_ref에서 a개 추가
         remaining = k - len(final_passages)  # 부족한 개수 계산
 
         # k-a개 만큼 final_passages와 set(main_ref[:k-a]) 합집합
@@ -165,7 +165,7 @@ class Reference:
         #     print(f"  - {idx}: {self.passage_texts[idx][:100]}")
 
 
-        return tuple(final_passages)  # ✅ 최종적으로 k개 반환
+        return list(final_passages)  # ✅ 최종적으로 k개 반환
 
 
 
