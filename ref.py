@@ -1,4 +1,6 @@
 # Feature Map 관련 최적화 코드 추가
+import math
+
 from rank_bm25 import BM25Okapi
 from transformers import DPRContextEncoderTokenizer, DPRContextEncoder, DPRQuestionEncoder, DPRQuestionEncoderTokenizer
 import IO
@@ -15,7 +17,7 @@ feature_map_path = '/feature_map.pt'  # ✅ Feature Map 저장 경로 추가
 
 
 class Reference:
-    def __init__(self, question_encoder, question_tokenizer, context_encoder, context_tokenizer, documents_PATH, batch_size=32):
+    def __init__(self, question_encoder, question_tokenizer, context_encoder, context_tokenizer, documents_PATH, batch_size=10000):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.question_encoder = question_encoder.to(self.device)
         self.question_tokenizer = question_tokenizer
@@ -32,29 +34,16 @@ class Reference:
             self.save_Q_past()
 
         self.documents_PATH = documents_PATH
-        self.docs = IO.load_passages(self.documents_PATH)
-        self.passage_texts = [passage["text"] for passage in self.docs]
-
-        # ✅ BM25를 생성하여 클래스 내부에서 저장
-        self.bm25 = BM25Okapi(self.passage_texts)  # 🔹 여기서 미리 초기화
-
-        if os.path.exists(tensor_path + feature_map_path):
-            self.feature_map = torch.load(tensor_path + feature_map_path)
-        else:
+        for i, chunk in enumerate(IO.load_passages_in_chunks(self.documents_PATH, batch_size)):
+            self.docs = list(chunk)
+            print('docs'+str(self.docs))
+            self.passage_texts = [passage['text'] for passage in self.docs]
+            # ✅ BM25를 생성하여 클래스 내부에서 저장
+            self.bm25 = BM25Okapi(self.passage_texts)  # 🔹 여기서 미리 초기화
             self.feature_map = self.encode_passages_batch(self.passage_texts)
-            torch.save(self.feature_map, tensor_path + feature_map_path)
+            torch.save(self.feature_map, tensor_path + '/feature_map'+str(i)+'.pt')
 
         self.passage_embeddings = self.feature_map
-
-
-        # ✅ Feature Map이 존재하면 로드, 없으면 생성
-        if os.path.exists(tensor_path + feature_map_path):
-            self.feature_map = torch.load(tensor_path + feature_map_path)
-        else:
-            self.feature_map = self.encode_passages_batch(self.passage_texts)
-            torch.save(self.feature_map, tensor_path + feature_map_path)
-
-        self.passage_embeddings = self.feature_map  # Feature Map 활용
 
     def encode_passages_batch(self, passages):
         """ ✅ 배치 단위로 DPR 문서 임베딩 생성 (Feature Map 적용) """
@@ -199,8 +188,7 @@ if __name__ == "__main__":
         context_tokenizer=DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base"),
         question_encoder=DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base"),
         question_tokenizer=DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base"),
-        documents_PATH='downloads/data/wikipedia_split/psgs_w100.tsv',
-        batch_size=128  # ✅ 배치 크기 설정
+        documents_PATH='data/docs/psgs_w100.tsv'
     )
 
     queries = ["Hello? my name is Jinsu", "Hello? my name is Alice"]
