@@ -33,7 +33,6 @@ def main(question):
         raise ValueError("❌ Error: `set_ref()` must be called before using `main()`.")  # ✅ 방어 코드 추가
 
     all_references = r.get_reference(question, 9) # ✅ 하나의 리스트만 반환
-    print(all_references)
     result_texts = [r.passage_texts[idx] for idx in all_references]
     return result_texts
 
