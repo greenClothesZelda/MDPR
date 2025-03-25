@@ -1,111 +1,151 @@
-import json
-import gzip
+# Feature Map 및 BM25 최적화 적용 버전 (BM25 비활성화됨)
+import os
 import torch
-from transformers import DPRQuestionEncoder, DPRContextEncoder, DPRQuestionEncoderTokenizer, DPRContextEncoderTokenizer
-from rank_bm25 import BM25Okapi
+from transformers import DPRContextEncoder, DPRContextEncoderTokenizer, DPRQuestionEncoder, DPRQuestionEncoderTokenizer
+# from rank_bm25 import BM25Okapi  # 🔒 BM25 사용 안함
+import option
+from feature_map_manager import FeatureMapManager
 
-import result
+# 텐서 저장 경로 및 파일명
+tensor_path = 'data/tensor'
+Q_past_path = '/Q_past.pt'
+QA_list_path = '/QA_list.pt'
+
+class Reference:
+    def __init__(self, question_encoder, question_tokenizer, context_encoder, context_tokenizer, documents_PATH, batch_size=10000):
+        # 모델 및 디바이스 설정
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.question_encoder = question_encoder.to(self.device)
+        self.question_tokenizer = question_tokenizer
+        self.context_encoder = context_encoder.to(self.device)
+        self.context_tokenizer = context_tokenizer
+        self.batch_size = batch_size
+
+        # 이전 질문 및 응답 저장 공간 초기화
+        self.Q_past = torch.empty((0, 768), device=self.device)
+        self.QA_list = torch.empty((0, 3), dtype=torch.long, device=self.device)
+
+        # 이전 데이터 로드 또는 저장
+        if os.path.exists(tensor_path + Q_past_path):
+            self.load_Q_past()
+        else:
+            self.save_Q_past()
+
+        # FeatureMapManager 클래스 초기화 및 feature_map 생성
+        self.feature_manager = FeatureMapManager(
+            context_encoder=self.context_encoder,
+            context_tokenizer=self.context_tokenizer,
+            documents_PATH=documents_PATH,
+            batch_size=batch_size,
+            tensor_path=tensor_path
+        )
+
+        # feature_map이 존재하지 않으면 새로 생성
+        if not os.listdir(self.feature_manager.feature_map_dir):
+            self.feature_manager.create_feature_maps()
+
+        # BM25 사용 안 함
+        # if not os.listdir(self.feature_manager.bm25_dir):
+        #     self.feature_manager.create_bm25_passages()
+
+        # DPR 문서 임베딩 전체 불러오기 (옵션)
+        # self.passage_embeddings = self.feature_manager.load_all_feature_maps()
+
+    def get_main_reference(self, embedded_query, k):
+        """ 배치 단위로 저장된 feature_map 파일을 하나씩 불러와 DPR 유사도 계산 """
+        sim_scores = []
+        index_offset = 0
+
+        # feature_map 파일 순회하며 유사도 계산
+        for i in range(self.feature_manager.get_num_feature_map_files()):
+            feature_map = self.feature_manager.load_feature_map_by_index(i).to(self.device)
+            sim = torch.matmul(feature_map, embedded_query.T).squeeze()  # [batch_size]
+            sim_scores.append((sim.cpu(), index_offset))
+            index_offset += feature_map.shape[0]
+
+        # 유사도 점수 병합 및 상위 k개 추출
+        all_scores = torch.cat([s[0] for s in sim_scores])
+        top_k_values, top_k_indices = torch.topk(all_scores, k, dim=0)
+
+        sorted_indices = torch.argsort(top_k_values, descending=True)
+        return top_k_indices[sorted_indices].tolist(), top_k_values.tolist()
+
+    def get_sub_references(self, embedded_query, a):
+        """ 유사한 이전 질문에 기반한 보조 문서 참조 """
+        if self.Q_past.shape[0] == 0:
+            self.Q_past = embedded_query.view(1, -1)
+            return []
+
+        # 유사도 계산
+        diff = self.Q_past - embedded_query.view(1, -1)
+        similarity_scores = -torch.norm(diff, dim=1)
+        _, top_a_indices = torch.topk(similarity_scores, min(a, similarity_scores.shape[0]), dim=0)
+
+        # 유효한 QA index 필터링
+        valid_indices = [idx for idx in top_a_indices.tolist() if idx < self.QA_list.shape[0]]
+        return self.QA_list[valid_indices].squeeze().tolist() if valid_indices else []
+
+    def get_reference(self, query, k):
+        """ 최종 참조 문서 k개 반환 (DPR 기반 + 유사 쿼리 기반 보조) """
+        # 쿼리 임베딩 생성
+        query_input = self.question_tokenizer(query, return_tensors="pt")
+        query_input = {key: value.to(self.device) for key, value in query_input.items()}
+        embedded_query = self.question_encoder(**query_input).pooler_output
+
+        # DPR 유사도 기반 참조 추출
+        main_ref, _ = self.get_main_reference(embedded_query, k)
+        a = max(1, k // 2)  # 보조 문서 개수
+        sub_ref = self.get_sub_references(embedded_query, a)
+
+        # 결과 집합 구성
+        final_passages = {ref if isinstance(ref, int) else ref[0] for ref in sub_ref[:a]}
+        remaining = k - len(final_passages)
+        final_passages = final_passages | set(main_ref[:remaining])
+
+        for idx in main_ref:
+            if len(final_passages) >= k:
+                break
+            final_passages.add(idx)
+
+        # Q_past 및 QA_list 업데이트
+        self.Q_past = torch.cat([self.Q_past, embedded_query.detach()], dim=0)
+        new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long).to(self.device)
+        self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
+        self.save_Q_past()
+
+        return list(final_passages)
+
+    def save_Q_past(self):
+        """ 이전 쿼리 임베딩 및 관련 문서 저장 """
+        torch.save(self.Q_past, tensor_path + Q_past_path)
+        torch.save(self.QA_list, tensor_path + QA_list_path)
+
+    def load_Q_past(self):
+        """ 이전 쿼리 임베딩 및 관련 문서 로드 """
+        self.Q_past = torch.load(tensor_path + Q_past_path, map_location=self.device)
+        self.QA_list = torch.load(tensor_path + QA_list_path, map_location=self.device)
+
+    def get_dynamic_weights(self, dpr_scores):
+        """ BM25 가중치 적용용 함수 (현재 미사용) """
+        max_similarity = dpr_scores.max().item()
+        if max_similarity >= 0.7:
+            return 0.7, 0.3
+        elif max_similarity >= 0.5:
+            return 0.5, 0.5
+        else:
+            return 0.3, 0.7
 
 
-# ✅ (1) Natural Questions (NQ) 데이터셋 로드
-import json
+if __name__ == "__main__":
+    ref = Reference(
+        context_encoder=DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base"),
+        context_tokenizer=DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base"),
+        question_encoder=DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base"),
+        question_tokenizer=DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base"),
+        documents_PATH='data/docs/psgs_w100.tsv'
+    )
 
-def load_nq_dataset(file_path, num_samples=100):
-    with open(file_path, "r", encoding="utf-8") as f:
-        data = json.load(f)  # ✅ JSON 파일 전체를 한 번에 로드
-
-    questions, answers, documents = [], [], []
-
-    for item in data[:num_samples]:  # ✅ 처음 num_samples개만 가져오기
-        question = item["question"]
-
-        # 🔹 정답 리스트 중 첫 번째 정답 가져오기
-        answer = item["answers"][0] if item["answers"] else ""
-
-        # 🔹 positive_ctxs의 첫 번째 passage 사용
-        long_answer = item["positive_ctxs"][0]["text"] if item["positive_ctxs"] else ""
-
-        questions.append(question)
-        answers.append(answer)
-        documents.append(long_answer)
-
-    return questions, answers, documents
-
-
-# ✅ (2) BM25 검색 모델 구축
-def build_bm25_index(documents):
-    tokenized_docs = [doc.split() for doc in documents]
-    return BM25Okapi(tokenized_docs), tokenized_docs
-
-# ✅ (3) DPR 및 MDPR 모델 및 토크나이저 로드
-device = "cuda" if torch.cuda.is_available() else "cpu"
-
-# 기본 DPR 모델
-dpr_question_encoder = DPRQuestionEncoder.from_pretrained("facebook/dpr-question_encoder-single-nq-base").to(device)
-dpr_context_encoder = DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base").to(device)
-
-# 토크나이저 (DPR & MDPR 동일하게 사용 가능)
-question_tokenizer = DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base")
-context_tokenizer = DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base")
-
-# ✅ (4) DPR 및 MDPR 임베딩 생성 함수
-def encode_dpr_passages(passages, model):
-    inputs = context_tokenizer(passages, padding=True, truncation=True, return_tensors="pt").to(device)
-    with torch.no_grad():
-        embeddings = model(**inputs).pooler_output
-    return embeddings
-
-def encode_dpr_question(question, model):
-    inputs = question_tokenizer(question, return_tensors="pt").to(device)
-    with torch.no_grad():
-        embedding = model(**inputs).pooler_output
-    return embedding
-
-# ✅ (5) Top-k 검색 및 정확도 평가 (BM25, DPR, MDPR)
-def compute_top_k_accuracy(questions, answers, documents, bm25, tokenized_docs, dpr_doc_embeddings, mdpr_doc_embeddings, k=3):
-    correct_bm25, correct_dpr, correct_mdpr = 0, 0, 0
-    total = len(questions)
-
-    for i, question in enumerate(questions):
-        # 🔹 BM25 검색
-        tokenized_query = question.split()
-        top_k_bm25 = bm25.get_top_n(tokenized_query, documents, n=k)
-
-        # 🔹 DPR 검색
-        question_embedding_dpr = encode_dpr_question(question, dpr_question_encoder)
-        similarities_dpr = torch.matmul(question_embedding_dpr, dpr_doc_embeddings.T).squeeze(0)
-        top_k_indices_dpr = torch.topk(similarities_dpr, k=k).indices.tolist()
-        top_k_dpr = [documents[idx] for idx in top_k_indices_dpr]
-
-        # 🔹 MDPR 검색 (사용자 정의 모델)
-        top_k_mdpr = result.main(question)
-
-        # 🔹 정답 포함 여부 확인
-        if any(answers[i] in doc for doc in top_k_bm25):
-            correct_bm25 += 1
-        if any(answers[i] in doc for doc in top_k_dpr):
-            correct_dpr += 1
-        if any(answers[i] in doc for doc in top_k_mdpr):
-            correct_mdpr += 1
-
-    return correct_bm25 / total, correct_dpr / total, correct_mdpr / total
-
-# ✅ 실행: NQ 데이터셋을 불러와서 Top-k Retrieval Accuracy 평가
-nq_file_path = "/Users/minjune/IdeaProjects/MDPR/data/nq/nq-dev.json"  # NQ 데이터셋 파일 경로
-questions, answers, documents = load_nq_dataset(nq_file_path)
-
-# BM25 검색 모델 구축
-bm25, tokenized_docs = build_bm25_index(documents)
-
-# DPR & MDPR 문서 임베딩 생성
-dpr_doc_embeddings = encode_dpr_passages(documents, dpr_context_encoder)
-#mdpr_doc_embeddings = encode_dpr_passages(documents, mdpr_context_encoder)
-
-# Top-5 Retrieval Accuracy 계산
-top_k_accuracy_bm25, top_k_accuracy_dpr, top_k_accuracy_mdpr = compute_top_k_accuracy(
-    questions, answers, documents, bm25, tokenized_docs, dpr_doc_embeddings, dpr_doc_embeddings, k=5
-)
-
-print(f"BM25 Top-5 Retrieval Accuracy: {top_k_accuracy_bm25:.2%}")
-print(f"DPR Top-5 Retrieval Accuracy: {top_k_accuracy_dpr:.2%}")
-print(f"MDPR Top-5 Retrieval Accuracy: {top_k_accuracy_mdpr:.2%}")
+    queries = ["Hello? my name is Jinsu", "Hello? my name is Alice"]
+    for query in queries:
+        refs = ref.get_reference(query, 3)
+        print(f"\n🔹 Query: {query}\n🔹 References: {refs}")
