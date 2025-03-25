@@ -3,7 +3,7 @@ import torch
 import pandas as pd
 from transformers import DPRContextEncoder, DPRContextEncoderTokenizer
 # from rank_bm25 import BM25Okapi  # 🔒 BM25 사용 비활성화
-import io
+import IO
 
 class FeatureMapManager:
     def __init__(self, context_encoder, context_tokenizer, documents_PATH, batch_size=10000, tensor_path='data/tensor'):
@@ -24,13 +24,19 @@ class FeatureMapManager:
 
     def create_feature_maps(self):
         """DPR 인코더를 사용해 배치 단위로 문서를 임베딩하고 파일로 저장"""
-        for i, chunk in enumerate(self.io.load_passages_in_chunks()):
-            texts = chunk['text'].tolist()
+        for i, chunk in enumerate(IO.load_passages_in_chunks(self.documents_PATH, self.batch_size)):
+            texts = [p['text'] for p in chunk]
             inputs = self.context_tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
             inputs = {k: v.to(self.context_encoder.device) for k, v in inputs.items()}
             with torch.no_grad():
                 embeddings = self.context_encoder(**inputs).pooler_output.cpu()
             torch.save(embeddings, os.path.join(self.feature_map_dir, f'feature_map_{i}.pt'))
+        # 🔽 메모리 확보
+        del texts
+        del inputs
+        del embeddings
+        del chunk
+        torch.cuda.empty_cache()  # ⚠️ GPU에서 메모리 완전 해제 (옵션)
 
     # def create_bm25_passages(self):
     #     for i, chunk in enumerate(self.load_passages_in_chunks()):
