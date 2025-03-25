@@ -54,20 +54,29 @@ class Reference:
     def get_main_reference(self, embedded_query, k):
         """ 배치 단위로 저장된 feature_map 파일을 하나씩 불러와 DPR 유사도 계산 """
         sim_scores = []
-        index_offset = 0
 
-        # feature_map 파일 순회하며 유사도 계산
+    # feature_map 파일 순회하며 DPR 유사도 계산
         for i in range(self.feature_manager.get_num_feature_map_files()):
             feature_map = self.feature_manager.load_feature_map_by_index(i).to(self.device)
             sim = torch.matmul(feature_map, embedded_query.T).squeeze()  # [batch_size]
-            sim_scores.append((sim.cpu(), index_offset))
-            index_offset += feature_map.shape[0]
+            sim_scores.append(sim.cpu())  # index_offset 제거됨
+            torch.cuda.empty_cache()  # 메모리 최적화
 
-        # 유사도 점수 병합 및 상위 k개 추출
-        all_scores = torch.cat([s[0] for s in sim_scores])
+        # 모든 DPR 유사도 점수 결합
+        all_scores = torch.cat(sim_scores)
+
+        # 디버깅 코드 (index and context)
+        #num = 0 # 인덱스 개수
+        #for idx, score in enumerate(all_scores):
+            #print(f"Index: {idx}, Score: {score.item()}")
+            #num+=1
+        #print(num)
+
         top_k_values, top_k_indices = torch.topk(all_scores, k, dim=0)
 
+        # 유사도 기준 내림차순 정렬
         sorted_indices = torch.argsort(top_k_values, descending=True)
+
         return top_k_indices[sorted_indices].tolist(), top_k_values.tolist()
 
     def get_sub_references(self, embedded_query, a):
@@ -112,6 +121,7 @@ class Reference:
         new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long).to(self.device)
         self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
         self.save_Q_past()
+        print(list(final_passages)) # index 확인용
 
         return list(final_passages)
 
