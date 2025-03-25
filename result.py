@@ -2,6 +2,7 @@ from transformers import DPRContextEncoder, DPRContextEncoderTokenizer, DPRQuest
 
 import llm
 import ref
+import IO
 
 r = None
 
@@ -30,10 +31,27 @@ if r is None:
 
 def main(question):
     if r is None:
-        raise ValueError("❌ Error: `set_ref()` must be called before using `main()`.")  # ✅ 방어 코드 추가
+        raise ValueError("❌ Error: `set_ref()` must be called before using `main()`.")
 
-    all_references = r.get_reference(question, 9) # ✅ 하나의 리스트만 반환
-    result_texts = [r.passage_texts[idx] for idx in all_references]
+    all_references = r.get_reference(question, 9)
+
+    # 🔄 passage 텍스트를 배치 단위로 순회하며 찾아냄
+    result_texts = []
+    current_idx = 0
+    needed_indices = set(all_references)
+
+    for chunk in IO.load_passages_in_chunks(r.feature_manager.documents_PATH, r.batch_size):
+        for i, passage in enumerate(chunk):
+            global_idx = current_idx + i
+            if global_idx in needed_indices:
+                #print(f"[Index {global_idx}] {passage['text'][:200]}...\n")  # 🔸 앞 200자만 출력
+                result_texts.append(passage["text"])
+            if len(result_texts) == len(all_references):
+                break
+        current_idx += len(chunk)
+        if len(result_texts) == len(all_references):
+            break
+
     return result_texts
 
 
