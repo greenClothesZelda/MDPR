@@ -20,8 +20,6 @@ class FeatureMapManager:
         self.feature_map_dir = os.path.join(tensor_path, 'feature_maps')
         os.makedirs(self.feature_map_dir, exist_ok=True)
         # self.bm25_dir = os.path.join(tensor_path, 'bm25_passages')  # 🔒 BM25 디렉토리 비활성화
-
-        os.makedirs(self.feature_map_dir, exist_ok=True)
         # os.makedirs(self.bm25_dir, exist_ok=True)  # 🔒 BM25 디렉토리 생성 비활성화
 
     def create_feature_maps(self):
