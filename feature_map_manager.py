@@ -3,6 +3,7 @@ import torch
 import pandas as pd
 from transformers import DPRContextEncoder, DPRContextEncoderTokenizer
 # from rank_bm25 import BM25Okapi  # 🔒 BM25 사용 비활성화
+import io
 
 class FeatureMapManager:
     def __init__(self, context_encoder, context_tokenizer, documents_PATH, batch_size=10000, tensor_path='data/tensor'):
@@ -23,14 +24,9 @@ class FeatureMapManager:
         os.makedirs(self.feature_map_dir, exist_ok=True)
         # os.makedirs(self.bm25_dir, exist_ok=True)  # 🔒 BM25 디렉토리 생성 비활성화
 
-    def load_passages_in_chunks(self):
-        """TSV 파일을 배치 단위로 로드하는 제너레이터 함수"""
-        return pd.read_csv(self.documents_PATH, sep='\t', header=0, dtype={'id': str}, chunksize=self.batch_size)
-
-
     def create_feature_maps(self):
         """DPR 인코더를 사용해 배치 단위로 문서를 임베딩하고 파일로 저장"""
-        for i, chunk in enumerate(self.load_passages_in_chunks()):
+        for i, chunk in enumerate(self.io.load_passages_in_chunks()):
             texts = chunk['text'].tolist()
             inputs = self.context_tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
             inputs = {k: v.to(self.context_encoder.device) for k, v in inputs.items()}
