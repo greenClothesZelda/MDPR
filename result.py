@@ -2,6 +2,7 @@ from transformers import DPRContextEncoder, DPRContextEncoderTokenizer, DPRQuest
 
 import llm
 import ref
+import IO
 
 r = None
 
@@ -30,11 +31,11 @@ if r is None:
 
 def main(question):
     if r is None:
-        raise ValueError("❌ Error: `set_ref()` must be called before using `main()`.")  # ✅ 방어 코드 추가
+        raise ValueError("❌ Error: `set_ref()` must be called before using `main()`.")
 
-    all_references = r.get_reference(question, 9) # ✅ 하나의 리스트만 반환
-    result_texts = [r.passage_texts[idx] for idx in all_references]
-    return result_texts
+    all_references = r.get_reference(question, 9)
+
+    return all_references
 
 
 if __name__ == "__main__":

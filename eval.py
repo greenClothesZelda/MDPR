@@ -2,6 +2,9 @@ from transformers import DPRContextEncoder, DPRContextEncoderTokenizer, DPRQuest
 
 import IO
 import result
+import torch
+import os
+import shutil
 
 
 def get_second_sentence(x):
@@ -16,6 +19,9 @@ def get_second_sentence(x):
 
 
 def main():
+
+
+    torch.cuda.empty_cache()
     eval_data_path = 'data/nq/nq-dev.json'
     docs_path = 'data/docs/psgs_w100.tsv'
 
@@ -28,25 +34,33 @@ def main():
     )
 
     eval_data = IO.read_jsonl_to_list(eval_data_path)
-    #print(eval_data)
-
+    #print('evaldata',eval_data)
+    score_list = []
     for item in eval_data:
         #print(item)
         question = item['question']
         docs = result.main(question)
+        sum_score = 0.0
+        #print('docs:', docs)
 
         for doc in docs:
+            #print(f'{doc}, score:', end=' ')
             score = 0.0
-            sentences = get_second_sentence(doc)
+
             for positive in item['positive_ctxs']:
-                if sentences in positive['text']:
+                #print(type(positive), positive, end=' ')
+                if str(doc) in positive['passage_id']:
                     score += positive['score']
 
             for negative in item['hard_negative_ctxs']:
-                if sentences in negative['text']:
+                if str(doc) in negative['passage_id']:
                     score -= negative['score']
 
-            print(score)
+            #print(score)
+            sum_score += score
+        print(question,': Total score:', sum_score)
+        score_list.append(sum_score)
+    print('scores', score_list)
 
 if __name__ == '__main__':
     main()
