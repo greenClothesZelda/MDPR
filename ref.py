@@ -106,11 +106,16 @@ class Reference:
 
         # DPR 유사도 기반 참조 추출
         main_ref, _ = self.get_main_reference(embedded_query, k)
-        a = max(1, k // 2)  # 보조 문서 개수
+        a = 0  # 보조 문서 개수
         sub_ref = self.get_sub_references(embedded_query, a)
 
-        # 결과 집합 구성
-        final_passages = {ref if isinstance(ref, int) else ref[0] for ref in sub_ref[:a]}
+        # 🔸 -1 인덱스를 제거하고 최종 참조 문서 구성
+        final_passages = {
+            ref if isinstance(ref, int) else ref[0]
+            for ref in sub_ref[:a]
+            if (ref if isinstance(ref, int) else ref[0]) >= 0
+        }
+
         remaining = k - len(final_passages)
         final_passages = final_passages | set(main_ref[:remaining])
 
@@ -124,9 +129,9 @@ class Reference:
         new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long).to(self.device)
         self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
         self.save_Q_past()
-        #print(list(final_passages)) # index 확인용
 
         return list(final_passages)
+
 
     def save_Q_past(self):
         """ 이전 쿼리 임베딩 및 관련 문서 저장 """
