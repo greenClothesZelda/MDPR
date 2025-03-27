@@ -6,7 +6,7 @@ from transformers import DPRContextEncoder, DPRContextEncoderTokenizer
 import IO
 
 class FeatureMapManager:
-    def __init__(self, context_encoder, context_tokenizer, documents_PATH, batch_size=10000, tensor_path='data/tensor'):
+    def __init__(self, context_encoder, context_tokenizer, documents_PATH, batch_size=500, tensor_path=r"C:\Users\wlstn\.cache\kagglehub\datasets\tensor"):
         # DPR Context 인코더 및 토크나이저 설정
         self.context_encoder = context_encoder
         self.context_tokenizer = context_tokenizer
@@ -25,18 +25,15 @@ class FeatureMapManager:
     def create_feature_maps(self):
         """DPR 인코더를 사용해 배치 단위로 문서를 임베딩하고 파일로 저장"""
         for i, chunk in enumerate(IO.load_passages_in_chunks(self.documents_PATH, self.batch_size)):
+            print(f"Creating feature map {i+30933}...")
             texts = [p['text'] for p in chunk]
             inputs = self.context_tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
             inputs = {k: v.to(self.context_encoder.device) for k, v in inputs.items()}
             with torch.no_grad():
                 embeddings = self.context_encoder(**inputs).pooler_output.cpu()
-            torch.save(embeddings, os.path.join(self.feature_map_dir, f'feature_map_{i}.pt'))
-        # 🔽 메모리 확보
-        del texts
-        del inputs
-        del embeddings
-        del chunk
-        torch.cuda.empty_cache()  # ⚠️ GPU에서 메모리 완전 해제 (옵션)
+            torch.save(embeddings, os.path.join(self.feature_map_dir, f'feature_map_{i+30933}.pt'))
+            # 🔽 메모리 확보
+            torch.cuda.empty_cache()  # ⚠️ GPU에서 메모리 완전 해제 (옵션)
 
     # def create_bm25_passages(self):
     #     for i, chunk in enumerate(self.load_passages_in_chunks()):
@@ -69,3 +66,13 @@ class FeatureMapManager:
     # def load_bm25(self):
     #     texts = self.load_all_bm25_texts()
     #     return BM25Okapi(texts)
+
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    FeatureMapManager(
+        context_encoder=DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base").to(device),
+        context_tokenizer=DPRContextEncoderTokenizer.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base"),
+        documents_PATH='data/docs/psgs_w100.tsv'
+    ).create_feature_maps()
+if __name__ == "__main__":
+    main()

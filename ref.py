@@ -7,7 +7,7 @@ import option
 from feature_map_manager import FeatureMapManager
 
 # 텐서 저장 경로 및 파일명
-tensor_path = 'data/tensor'
+tensor_path = r"C:\Users\wlstn\.cache\kagglehub\datasets\tensor"
 Q_past_path = '/Q_past.pt'
 QA_list_path = '/QA_list.pt'
 
@@ -54,13 +54,16 @@ class Reference:
     def get_main_reference(self, embedded_query, k):
         """ 배치 단위로 저장된 feature_map 파일을 하나씩 불러와 DPR 유사도 계산 """
         sim_scores = []
-
     # feature_map 파일 순회하며 DPR 유사도 계산
         for i in range(self.feature_manager.get_num_feature_map_files()):
+            #print(f"Calculating similarity for feature_map...{i}")
             feature_map = self.feature_manager.load_feature_map_by_index(i).to(self.device)
-            sim = torch.matmul(feature_map, embedded_query.T).squeeze()  # [batch_size]
-            sim_scores.append(sim.cpu())  # index_offset 제거됨
-            torch.cuda.empty_cache()  # 메모리 최적화
+            with torch.no_grad():
+                sim = torch.matmul(feature_map, embedded_query.T).squeeze()  # [batch_size]
+                sim_scores.append(sim.cpu())  # index_offset 제거됨
+            feature_map.cpu()  # 메모리 확보를 위해 CPU로 이동 및
+            del feature_map
+            torch.cuda.empty_cache()
 
         # 모든 DPR 유사도 점수 결합
         all_scores = torch.cat(sim_scores)
@@ -121,7 +124,7 @@ class Reference:
         new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long).to(self.device)
         self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
         self.save_Q_past()
-        print(list(final_passages)) # index 확인용
+        #print(list(final_passages)) # index 확인용
 
         return list(final_passages)
 
