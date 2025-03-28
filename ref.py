@@ -116,7 +116,7 @@ class Reference:
         main_ref_passages, _ = self.get_main_reference(embedded_query, k)  # (n, k)
 
         # 🔹 보조 참조는 현재 사용 안 함 (a=0)
-        a = 0
+        a = 2
         sub_ref_passages = [[] for _ in range(n)]  # future-proof structure
 
         final_refs_passages = []
