@@ -32,35 +32,13 @@ def main():
         question_tokenizer=DPRQuestionEncoderTokenizer.from_pretrained("facebook/dpr-question_encoder-single-nq-base"),
         documents_PATH='data/docs/psgs_w100.tsv'
     )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    eval_data = IO.read_jsonl_to_list(eval_data_path)
+    embedded_query = torch.load('data/nq/question_tensor.pt', map_location=device)
+    embedded_query = embedded_query[:2]
     #print('evaldata',eval_data)
     score_list = []
-    for item in eval_data:
-        #print(item)
-        question = item['question']
-        docs = result.main(question)
-        sum_score = 0.0
-        #print('docs:', docs)
-
-        for doc in docs:
-            #print(f'{doc}, score:', end=' ')
-            score = 0.0
-
-            for positive in item['positive_ctxs']:
-                #print(type(positive), positive, end=' ')
-                if str(doc) in positive['passage_id']:
-                    score += positive['score']
-
-            for negative in item['hard_negative_ctxs']:
-                if str(doc) in negative['passage_id']:
-                    score -= negative['score']
-
-            #print(score)
-            sum_score += score
-        print(question,': Total score:', sum_score)
-        score_list.append(sum_score)
-    print('scores', score_list)
+    torch.save(result.main(embedded_query), 'test.pt')
 
 if __name__ == '__main__':
     main()

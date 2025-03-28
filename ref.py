@@ -7,9 +7,9 @@ import option
 from feature_map_manager import FeatureMapManager
 
 # 텐서 저장 경로 및 파일명
-tensor_path = r"C:\Users\wlstn\.cache\kagglehub\datasets\tensor"
-Q_past_path = '/Q_past.pt'
-QA_list_path = '/QA_list.pt'
+tensor_path = option.tensor_path
+Q_past_path = option.Q_past_path
+QA_list_path = option.QA_list_path
 
 class Reference:
     def __init__(self, question_encoder, question_tokenizer, context_encoder, context_tokenizer, documents_PATH, batch_size=10000):
@@ -53,80 +53,105 @@ class Reference:
 
     def get_main_reference(self, embedded_query, k):
         """ 배치 단위로 저장된 feature_map 파일을 하나씩 불러와 DPR 유사도 계산 """
-        sim_scores = []
+        sim_scores = torch.empty((embedded_query.shape[0], 21015324), dtype=torch.float, device=self.device)
     # feature_map 파일 순회하며 DPR 유사도 계산
         for i in range(self.feature_manager.get_num_feature_map_files()):
             #print(f"Calculating similarity for feature_map...{i}")
             feature_map = self.feature_manager.load_feature_map_by_index(i).to(self.device)
             with torch.no_grad():
-                sim = torch.matmul(feature_map, embedded_query.T).squeeze()  # [batch_size]
-                sim_scores.append(sim.cpu())  # index_offset 제거됨
+                sim = torch.matmul(embedded_query, feature_map.T)
+                sim_scores[:, 2000000*i:2000000*i+feature_map.shape[0]] = sim
             feature_map.cpu()  # 메모리 확보를 위해 CPU로 이동 및
             del feature_map
             torch.cuda.empty_cache()
+        print(sim_scores.shape)
 
-        # 모든 DPR 유사도 점수 결합
-        all_scores = torch.cat(sim_scores)
-
-        # 디버깅 코드 (index and context)
-        #num = 0 # 인덱스 개수
-        #for idx, score in enumerate(all_scores):
-            #print(f"Index: {idx}, Score: {score.item()}")
-            #num+=1
-        #print(num)
-
-        top_k_values, top_k_indices = torch.topk(all_scores, k, dim=0)
+        top_k_values, top_k_indices = torch.topk(sim_scores, k, dim=1)
 
         # 유사도 기준 내림차순 정렬
-        sorted_indices = torch.argsort(top_k_values, descending=True)
+        #sorted_indices = torch.argsort(top_k_values, descending=True)
+        #print(top_k_indices[sorted_indices].tolist(), top_k_values.tolist())
+        return top_k_indices, top_k_values
 
-        return top_k_indices[sorted_indices].tolist(), top_k_values.tolist()
-
-    def get_sub_references(self, embedded_query, a):
-        """ 유사한 이전 질문에 기반한 보조 문서 참조 """
+    def get_sub_references(self, embedded_queries, a):
+        """
+        🔹 (n, 768) 형태의 쿼리 벡터를 입력받아 각 쿼리에 대해
+           Q_past와의 유사도를 기반으로 보조 참조 인덱스를 반환합니다.
+        🔹 결과는 (n, a) 형태의 리스트로 반환됩니다.
+        """
         if self.Q_past.shape[0] == 0:
-            self.Q_past = embedded_query.view(1, -1)
-            return []
+            self.Q_past = embedded_queries.clone()
+            return [[] for _ in range(embedded_queries.shape[0])]  # 쿼리 개수만큼 빈 리스트
 
-        # 유사도 계산
-        diff = self.Q_past - embedded_query.view(1, -1)
-        similarity_scores = -torch.norm(diff, dim=1)
-        _, top_a_indices = torch.topk(similarity_scores, min(a, similarity_scores.shape[0]), dim=0)
+        sub_refs_all = []
 
-        # 유효한 QA index 필터링
-        valid_indices = [idx for idx in top_a_indices.tolist() if idx < self.QA_list.shape[0]]
-        return self.QA_list[valid_indices].squeeze().tolist() if valid_indices else []
+        for embedded_query in embedded_queries:
+            # 🔹 유사도 계산
+            diff = self.Q_past - embedded_query.view(1, -1)
+            similarity_scores = -torch.norm(diff, dim=1)
 
-    def get_reference(self, query, k):
-        """ 최종 참조 문서 k개 반환 (DPR 기반 + 유사 쿼리 기반 보조) """
-        # 쿼리 임베딩 생성
-        query_input = self.question_tokenizer(query, return_tensors="pt")
-        query_input = {key: value.to(self.device) for key, value in query_input.items()}
-        embedded_query = self.question_encoder(**query_input).pooler_output
+            # 🔹 top-a 유사한 인덱스
+            _, top_a_indices = torch.topk(similarity_scores, min(a, similarity_scores.shape[0]), dim=0)
 
-        # DPR 유사도 기반 참조 추출
-        main_ref, _ = self.get_main_reference(embedded_query, k)
-        a = max(1, k // 2)  # 보조 문서 개수
-        sub_ref = self.get_sub_references(embedded_query, a)
+            # 🔹 QA_list 범위 내에서만 인덱스 유효성 확인
+            valid_indices = [idx for idx in top_a_indices.tolist() if idx < self.QA_list.shape[0]]
 
-        # 결과 집합 구성
-        final_passages = {ref if isinstance(ref, int) else ref[0] for ref in sub_ref[:a]}
-        remaining = k - len(final_passages)
-        final_passages = final_passages | set(main_ref[:remaining])
+            # 🔹 보조 참조 인덱스 추출 (-1은 제외)
+            sub_refs = [self.QA_list[idx].tolist()[0] for idx in valid_indices if self.QA_list[idx][0] >= 0]
+            sub_refs_all.append(sub_refs)
 
-        for idx in main_ref:
-            if len(final_passages) >= k:
-                break
-            final_passages.add(idx)
+        return sub_refs_all  # List[List[int]] (n, a)
 
-        # Q_past 및 QA_list 업데이트
-        self.Q_past = torch.cat([self.Q_past, embedded_query.detach()], dim=0)
-        new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long).to(self.device)
-        self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
+
+    def get_reference(self, embedded_query, k):
+        """
+        🔹 (n, 768) 형태의 배치 쿼리 DPR 임베딩을 받아,
+           각 쿼리에 대해 DPR 기반으로 top-k 문서 인덱스를 반환합니다.
+        🔹 현재 보조 참조(sub_ref)는 비활성화 상태 (a=0)
+        🔹 반환값: List[List[int]] (쿼리 개수 n, 각 쿼리당 k개 인덱스)
+        """
+        n = embedded_query.shape[0]
+
+        # 🔹 DPR 유사도 기반 메인 참조
+        main_ref_passages, _ = self.get_main_reference(embedded_query, k)  # (n, k)
+
+        # 🔹 보조 참조는 현재 사용 안 함 (a=0)
+        a = 0
+        sub_ref_passages = [[] for _ in range(n)]  # future-proof structure
+
+        final_refs_passages = []
+
+        for i in range(n):
+            main_ref = main_ref_passages[i]
+            sub_ref = sub_ref_passages[i]  # 현재는 빈 리스트이지만 확장 가능
+
+            # 🔸 -1 제거 및 중복 방지
+            final_passages = {
+                ref if isinstance(ref, int) else ref[0]
+                for ref in sub_ref[:a]
+                if (ref if isinstance(ref, int) else ref[0]) >= 0
+            }
+
+            # 🔸 부족한 개수만큼 main_ref에서 보충
+            remaining = k - len(final_passages)
+            final_passages.update(main_ref[:remaining])
+
+            for idx in main_ref:
+                if len(final_passages) >= k:
+                    break
+                final_passages.add(idx)
+
+            final_refs_passages.append(list(final_passages))
+
+            # 🔹 Q_past 및 QA_list 업데이트 (main_ref의 첫 번째만 기록)
+            self.Q_past = torch.cat([self.Q_past, embedded_query[i].unsqueeze(0).detach()], dim=0)
+            new_QA = torch.tensor([[main_ref[0], -1, -1]], dtype=torch.long).to(self.device)
+            self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
+
         self.save_Q_past()
-        #print(list(final_passages)) # index 확인용
+        return final_refs_passages  # ✅ List[List[int]] (n, k)
 
-        return list(final_passages)
+
 
     def save_Q_past(self):
         """ 이전 쿼리 임베딩 및 관련 문서 저장 """
