@@ -77,30 +77,32 @@ class Reference:
         """
         🔹 (n, 768) 형태의 쿼리 벡터를 입력받아 각 쿼리에 대해
            Q_past와의 유사도를 기반으로 보조 참조 인덱스를 반환합니다.
-        🔹 결과는 (n, a) 형태의 리스트로 반환됩니다.
+        🔹 결과는 List[List[tensor(int)]] 형태로 반환됩니다.
         """
         if self.Q_past.shape[0] == 0:
             self.Q_past = embedded_queries.clone()
-            return [[] for _ in range(embedded_queries.shape[0])]  # 쿼리 개수만큼 빈 리스트
+            return [[] for _ in range(embedded_queries.shape[0])]
 
         sub_refs_all = []
 
         for embedded_query in embedded_queries:
-            # 🔹 유사도 계산
             diff = self.Q_past - embedded_query.view(1, -1)
             similarity_scores = -torch.norm(diff, dim=1)
-
-            # 🔹 top-a 유사한 인덱스
             _, top_a_indices = torch.topk(similarity_scores, min(a, similarity_scores.shape[0]), dim=0)
 
-            # 🔹 QA_list 범위 내에서만 인덱스 유효성 확인
             valid_indices = [idx for idx in top_a_indices.tolist() if idx < self.QA_list.shape[0]]
 
-            # 🔹 보조 참조 인덱스 추출 (-1은 제외)
-            sub_refs = [self.QA_list[idx].tolist()[0] for idx in valid_indices if self.QA_list[idx][0] >= 0]
+            # 🔹 tensor(int) 형태의 리스트로 저장
+            sub_refs = [torch.tensor(self.QA_list[idx][0].item(), dtype=torch.long)
+                        for idx in valid_indices if self.QA_list[idx][0] >= 0]
+
             sub_refs_all.append(sub_refs)
 
-        return sub_refs_all  # List[List[int]] (n, a)
+        print(f"📌 sub_refs_all: {sub_refs_all}")
+        return sub_refs_all  # List[List[tensor(int)]]
+
+
+
 
 
     def get_reference(self, embedded_query, k):
@@ -117,37 +119,32 @@ class Reference:
 
         # 🔹 보조 참조는 현재 사용 안 함 (a=0)
         a = 2
-        sub_ref_passages = [[] for _ in range(n)]  # future-proof structure
+        sub_ref_passages = self.get_sub_references(embedded_query,a)  # future-proof structure
 
         final_refs_passages = []
 
         for i in range(n):
             main_ref = main_ref_passages[i]
-            sub_ref = sub_ref_passages[i]  # 현재는 빈 리스트이지만 확장 가능
+            sub_ref = sub_ref_passages[i]  # List[tensor(int)]
 
-            # 🔸 -1 제거 및 중복 방지
-            final_passages = {
-                ref if isinstance(ref, int) else ref[0]
-                for ref in sub_ref[:a]
-                if (ref if isinstance(ref, int) else ref[0]) >= 0
-            }
+            # 🔸 -1 제거 및 중복 방지를 위한 집합 구성
+            final_passages = {ref for ref in sub_ref if ref.item() >= 0}
 
-            # 🔸 부족한 개수만큼 main_ref에서 보충
-            remaining = k - len(final_passages)
-            final_passages.update(main_ref[:remaining])
-
-            for idx in main_ref:
+            # 🔸 부족한 개수만큼 main_ref에서 tensor로 추가
+            for ref in main_ref:
+                tensor_ref = torch.tensor(ref.item(), dtype=torch.long)
+                final_passages.add(tensor_ref)
                 if len(final_passages) >= k:
                     break
-                final_passages.add(idx)
 
             final_refs_passages.append(list(final_passages))
 
-            # 🔹 Q_past 및 QA_list 업데이트 (main_ref의 첫 번째만 기록)
+
+    # 🔹 Q_past 및 QA_list 업데이트 (main_ref의 첫 번째만 기록)
             self.Q_past = torch.cat([self.Q_past, embedded_query[i].unsqueeze(0).detach()], dim=0)
             new_QA = torch.tensor([[main_ref[0], -1, -1]], dtype=torch.long).to(self.device)
             self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
-
+        print(final_refs_passages)
         self.save_Q_past()
         return final_refs_passages  # ✅ List[List[int]] (n, k)
 
