@@ -7,9 +7,9 @@ import option
 from feature_map_manager import FeatureMapManager
 
 # 텐서 저장 경로 및 파일명
-tensor_path = 'data/tensor'
-Q_past_path = '/Q_past.pt'
-QA_list_path = '/QA_list.pt'
+tensor_path = option.tensor_path
+Q_past_path = option.Q_past_path
+QA_list_path = option.QA_list_path
 
 class Reference:
     def __init__(self, question_encoder, question_tokenizer, context_encoder, context_tokenizer, documents_PATH, batch_size=10000):

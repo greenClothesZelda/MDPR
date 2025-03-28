@@ -4,9 +4,11 @@ import pandas as pd
 from transformers import DPRContextEncoder, DPRContextEncoderTokenizer
 # from rank_bm25 import BM25Okapi  # 🔒 BM25 사용 비활성화
 import IO
+import option
+
 
 class FeatureMapManager:
-    def __init__(self, context_encoder, context_tokenizer, documents_PATH, batch_size=500, tensor_path=r"C:\Users\wlstn\.cache\kagglehub\datasets\tensor"):
+    def __init__(self, context_encoder, context_tokenizer, documents_PATH, batch_size=500, tensor_path=option.tensor_path):
         # DPR Context 인코더 및 토크나이저 설정
         self.context_encoder = context_encoder
         self.context_tokenizer = context_tokenizer
