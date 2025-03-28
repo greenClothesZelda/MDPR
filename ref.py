@@ -7,7 +7,7 @@ import option
 from feature_map_manager import FeatureMapManager
 
 # 텐서 저장 경로 및 파일명
-tensor_path = r"C:\Users\wlstn\.cache\kagglehub\datasets\tensor"
+tensor_path = 'data/tensor'
 Q_past_path = '/Q_past.pt'
 QA_list_path = '/QA_list.pt'
 
@@ -53,34 +53,25 @@ class Reference:
 
     def get_main_reference(self, embedded_query, k):
         """ 배치 단위로 저장된 feature_map 파일을 하나씩 불러와 DPR 유사도 계산 """
-        sim_scores = []
+        sim_scores = torch.empty((embedded_query.shape[0], 21015324), dtype=torch.float, device=self.device)
     # feature_map 파일 순회하며 DPR 유사도 계산
         for i in range(self.feature_manager.get_num_feature_map_files()):
             #print(f"Calculating similarity for feature_map...{i}")
             feature_map = self.feature_manager.load_feature_map_by_index(i).to(self.device)
             with torch.no_grad():
-                sim = torch.matmul(feature_map, embedded_query.T).squeeze()  # [batch_size]
-                sim_scores.append(sim.cpu())  # index_offset 제거됨
+                sim = torch.matmul(embedded_query, feature_map.T)
+                sim_scores[:, 2000000*i:2000000*i+feature_map.shape[0]] = sim
             feature_map.cpu()  # 메모리 확보를 위해 CPU로 이동 및
             del feature_map
             torch.cuda.empty_cache()
+        print(sim_scores.shape)
 
-        # 모든 DPR 유사도 점수 결합
-        all_scores = torch.cat(sim_scores)
-
-        # 디버깅 코드 (index and context)
-        #num = 0 # 인덱스 개수
-        #for idx, score in enumerate(all_scores):
-            #print(f"Index: {idx}, Score: {score.item()}")
-            #num+=1
-        #print(num)
-
-        top_k_values, top_k_indices = torch.topk(all_scores, k, dim=0)
+        top_k_values, top_k_indices = torch.topk(sim_scores, k, dim=1)
 
         # 유사도 기준 내림차순 정렬
-        sorted_indices = torch.argsort(top_k_values, descending=True)
-
-        return top_k_indices[sorted_indices].tolist(), top_k_values.tolist()
+        #sorted_indices = torch.argsort(top_k_values, descending=True)
+        #print(top_k_indices[sorted_indices].tolist(), top_k_values.tolist())
+        return top_k_indices, top_k_values
 
     def get_sub_references(self, embedded_query, a):
         """ 유사한 이전 질문에 기반한 보조 문서 참조 """
@@ -97,15 +88,11 @@ class Reference:
         valid_indices = [idx for idx in top_a_indices.tolist() if idx < self.QA_list.shape[0]]
         return self.QA_list[valid_indices].squeeze().tolist() if valid_indices else []
 
-    def get_reference(self, query, k):
+    def get_reference(self, embedded_query, k):
         """ 최종 참조 문서 k개 반환 (DPR 기반 + 유사 쿼리 기반 보조) """
-        # 쿼리 임베딩 생성
-        query_input = self.question_tokenizer(query, return_tensors="pt")
-        query_input = {key: value.to(self.device) for key, value in query_input.items()}
-        embedded_query = self.question_encoder(**query_input).pooler_output
-
         # DPR 유사도 기반 참조 추출
         main_ref, _ = self.get_main_reference(embedded_query, k)
+        print(main_ref.shape, main_ref.tolist())
         a = 0  # 보조 문서 개수
         sub_ref = self.get_sub_references(embedded_query, a)
 
