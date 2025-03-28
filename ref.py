@@ -94,30 +94,30 @@ class Reference:
         main_ref, _ = self.get_main_reference(embedded_query, k)
         print(main_ref.shape, main_ref.tolist())
         a = 0  # 보조 문서 개수
-        sub_ref = self.get_sub_references(embedded_query, a)
+        sub_ref = []#self.get_sub_references(embedded_query, a)
 
         # 🔸 -1 인덱스를 제거하고 최종 참조 문서 구성
-        final_passages = {
-            ref if isinstance(ref, int) else ref[0]
-            for ref in sub_ref[:a]
-            if (ref if isinstance(ref, int) else ref[0]) >= 0
-        }
+        # final_passages = {
+        #     ref if isinstance(ref, int) else ref[0]
+        #     for ref in sub_ref[:a]
+        #     if (ref if isinstance(ref, int) else ref[0]) >= 0
+        # }
 
-        remaining = k - len(final_passages)
-        final_passages = final_passages | set(main_ref[:remaining])
+        # remaining = k - len(final_passages)
+        # final_passages = final_passages | set(main_ref[:remaining])
+        #
+        # for idx in main_ref:
+        #     if len(final_passages) >= k:
+        #         break
+        #     final_passages.add(idx)
 
-        for idx in main_ref:
-            if len(final_passages) >= k:
-                break
-            final_passages.add(idx)
+        # # Q_past 및 QA_list 업데이트
+        # self.Q_past = torch.cat([self.Q_past, embedded_query.detach()], dim=0)
+        # new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long).to(self.device)
+        # self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
+        # self.save_Q_past()
 
-        # Q_past 및 QA_list 업데이트
-        self.Q_past = torch.cat([self.Q_past, embedded_query.detach()], dim=0)
-        new_QA = torch.tensor([[idx, -1, -1] for idx in main_ref[:1]], dtype=torch.long).to(self.device)
-        self.QA_list = torch.cat([self.QA_list, new_QA], dim=0)
-        self.save_Q_past()
-
-        return list(final_passages)
+        return main_ref
 
 
     def save_Q_past(self):
