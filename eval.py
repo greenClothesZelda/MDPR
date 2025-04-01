@@ -1,10 +1,7 @@
 from transformers import DPRContextEncoder, DPRContextEncoderTokenizer, DPRQuestionEncoder, DPRQuestionEncoderTokenizer
 
-import IO
 import result
 import torch
-import os
-import shutil
 
 
 def get_second_sentence(x):
@@ -22,8 +19,6 @@ def main():
 
 
     torch.cuda.empty_cache()
-    eval_data_path = 'data/nq/nq-dev.json'
-    docs_path = 'data/docs/psgs_w100.tsv'
 
     result.set_ref(
         context_encoder=DPRContextEncoder.from_pretrained("facebook/dpr-ctx_encoder-single-nq-base"),
@@ -35,10 +30,13 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     embedded_query = torch.load('data/nq/question_tensor.pt', map_location=device)
-    embedded_query = embedded_query[:2]
-    #print('evaldata',eval_data)
-    score_list = []
-    torch.save(result.main(embedded_query), 'test.pt')
+
+    batch = 100
+    for i in range(batch):
+        print(f"Processing batch {i}...")
+        torch.save(result.main(embedded_query[batch*i:min(batch*(i+1), embedded_query.shape[0])]), f'data/pkl/indexs{i}.pt')
+
+    print('Done!')
 
 if __name__ == '__main__':
     main()

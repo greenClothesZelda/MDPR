@@ -27,13 +27,13 @@ class FeatureMapManager:
     def create_feature_maps(self):
         """DPR 인코더를 사용해 배치 단위로 문서를 임베딩하고 파일로 저장"""
         for i, chunk in enumerate(IO.load_passages_in_chunks(self.documents_PATH, self.batch_size)):
-            print(f"Creating feature map {i+30933}...")
+            print(f"Creating feature map {i}...")
             texts = [p['text'] for p in chunk]
             inputs = self.context_tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
             inputs = {k: v.to(self.context_encoder.device) for k, v in inputs.items()}
             with torch.no_grad():
                 embeddings = self.context_encoder(**inputs).pooler_output.cpu()
-            torch.save(embeddings, os.path.join(self.feature_map_dir, f'feature_map_{i+30933}.pt'))
+            torch.save(embeddings, os.path.join(r"C:\Users\wlstn\.cache\kagglehub\datasets\tensor\feature_maps", f'feature_map_{i}.pt'))
             # 🔽 메모리 확보
             torch.cuda.empty_cache()  # ⚠️ GPU에서 메모리 완전 해제 (옵션)
 

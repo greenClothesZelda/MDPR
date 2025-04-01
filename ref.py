@@ -58,9 +58,13 @@ class Reference:
         for i in range(self.feature_manager.get_num_feature_map_files()):
             #print(f"Calculating similarity for feature_map...{i}")
             feature_map = self.feature_manager.load_feature_map_by_index(i).to(self.device)
+            print(feature_map.shape)
             with torch.no_grad():
+                embedded_query = torch.nn.functional.normalize(embedded_query, p=2, dim=1)
+                feature_map = torch.nn.functional.normalize(feature_map, p=2, dim=1)
                 sim = torch.matmul(embedded_query, feature_map.T)
-                sim_scores[:, 2000000*i:2000000*i+feature_map.shape[0]] = sim
+                #print('embedded_query:', embedded_query.shape, 'feature_map:', feature_map.shape)
+                sim_scores[:, 2000000*i:min(21015324, 2000000*(i+1))] = sim
             feature_map.cpu()  # 메모리 확보를 위해 CPU로 이동 및
             del feature_map
             torch.cuda.empty_cache()
